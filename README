@@ -1,0 +1,3 @@
+This library allows RobotFramework to test DHCP clients, by communicating with a DHCP server installed on the test platform and to handle lease events using RobotFramework keywords
+Currently, only dnsmasq is supported as DHCP server, and it must be installed separately from this library
+RobotFramework will then be able to be notified when leases are added, updated and deleted from dnsmasq
