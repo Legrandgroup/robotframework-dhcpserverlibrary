@@ -28,20 +28,20 @@ class DhcpServerLeaseList:
         """
         self.leases_dict = {}
     
-    def add_lease(self, ipv4_address, hw_address):
+    def addLease(self, ipv4_address, hw_address):
         """
         Add a new entry in the database with ipv4_address allocated to entry hw_address
         """
         with self.leases_dict_mutex:
             self.leases_dict[hw_address] = ipv4_address
     
-    def update_lease(self, ipv4_address, hw_address):
+    def updateLease(self, ipv4_address, hw_address):
         """
         Update an existing entry in the database with ipv4_address allocated to entry hw_address
         """
-        self.add_lease(ipv4_address, hw_address)
+        self.addLease(ipv4_address, hw_address)
         
-    def delete_lease(self, hw_address, raise_exceptions = False):
+    def deleteLease(self, hw_address, raise_exceptions = False):
         """
         Delete an entry in the database, from its hw_address key
         If raise_exceptions is set to True, deleting a non-existing key will raise a TypeError exception
@@ -204,21 +204,21 @@ class DnsmasqDhcpServerWrapper:
         Method called when receiving the DhcpLeaseAdded D-Bus signal from dnsmasq
         """
         logger.debug('Got signal DhcpLeaseAdded for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.add_lease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        self._lease_database.addLease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
           
     def _handleDhcpLeaseUpdated(self, ipaddr, hwaddr, hostname, **kwargs):
         """
         Method called when receiving the DhcpLeaseUpdated D-Bus signal from dnsmasq
         """
         logger.debug('Got signal DhcpLeaseUpdated for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.update_lease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        self._lease_database.updateLease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
         
     def _handleDhcpLeaseDeleted(self, ipaddr, hwaddr, hostname, **kwargs):
         """
         Method called when receiving the DhcpLeaseDeleted D-Bus signal from dnsmasq
         """
         logger.debug('Got signal DhcpLeaseDeleted for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.delete_lease(str(hwaddr))  # Note: hwaddr is  of type dbus.String, so convert it to python native str
+        self._lease_database.deleteLease(str(hwaddr))  # Note: hwaddr is  of type dbus.String, so convert it to python native str
         
     def getLeasesList(self):
         """
