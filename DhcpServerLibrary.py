@@ -6,13 +6,27 @@ from __future__ import print_function
 import os
 
 import threading
+import atexit
 
 import gobject
 import dbus
 import dbus.mainloop.glib
 
+import time
 import subprocess
 
+client = None
+
+# This cleanup handler is not used when this library is imported in RF, only when run as standalone
+if __name__ == '__main__':
+    def cleanupAtExit():
+        """
+        Called when this program is terminated, to perform the same cleanup as expected in Teardown when run within Robotframework
+        """
+        
+        global client
+        
+        client.stop()
 
 class DhcpServerLeaseList:
     """
@@ -80,14 +94,13 @@ class DnsmasqDhcpServerWrapper:
     DNSMASQ_DBUS_SERVICE_INTERFACE = 'uk.org.thekelleys.dnsmasq'
     DNSMASQ_DEFAULT_PID_FILE = '/var/run/dnsmasq/dnsmasq.pid'   # Default value on Debian
     
-    def __init__(self, ifname, dhcp_server_pid_file_path = None):
+    def __init__(self, ifname):
         """
-        Instantiate a new DnsmasqDhcpServerWrapper object that represents a DHCP client remotely-controlled via D-Bus
-        This RemoteDhcpClientControl object will mimic the status/methods of the remotely-controlled DHCP client so that we can interact with RemoteDhcpClientControl without any knowledge of the actual remotely-controller DHCP client
+        Instantiate a new DnsmasqDhcpServerWrapper object that observes a dnsmasq DHCP server via D-Bus
         """
-        if dhcp_server_pid_file_path is None:
-            self._dhcp_server_pid_file_path = DnsmasqDhcpServerWrapper.DNSMASQ_DEFAULT_PID_FILE
-        self._lease_database = DhcpServerLeaseList()    
+        self._lease_database = DhcpServerLeaseList()
+        self._ifname = ifname   # We store the interface but dnsmasq does not provide information concerning the interface in its D-Bus announcements... so we cannot use it for now
+        # This also means that we can have only one instance of dnsmasq on the machine, or leases for all interfaces will mix in our database 
 
         self._dbus_loop = gobject.MainLoop()
         self._bus = dbus.SystemBus()
@@ -133,7 +146,7 @@ class DnsmasqDhcpServerWrapper:
 
         self._getversion_unlock_event.clear()
         self._remote_version = ''
-        slave_version = self._dbus_iface.GetVersion(reply_handler = self._getVersionUnlock, error_handler = self._getVersionError)
+        self._dbus_iface.GetVersion(reply_handler = self._getVersionUnlock, error_handler = self._getVersionError)
         if not self._getversion_unlock_event.wait(4):   # We give 4s for slave to answer the GetVersion() request
             raise Exception('TimeoutOnGetVersion')
         else:
@@ -148,17 +161,6 @@ class DnsmasqDhcpServerWrapper:
         """
         
         self._lease_database.reset()   # Empty internal database
-        
-        with open(self._dhcp_server_pid_file_path, 'r') as f:
-            dnsmasq_pid_str = f.readline()
-            
-        if not dnsmasq_pid_str:
-            raise Exception('EmptyPIDFile')
-        
-        dnsmasq_pid = int(dnsmasq_pid_str)
-        
-        args = ['sudo', 'kill', '-SIGHUP', str(dnsmasq_pid)]    # Send SIGHUP to dnsmasq
-        subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
 
     def exit(self):
         """
@@ -235,6 +237,193 @@ class DnsmasqDhcpServerWrapper:
         """
         return self._lease_database.get_ipv4address_for_hwaddress(mac)
     
+    
+class SlaveDhcpServerProcess:
+    """
+    Slave DHCP server process manipulation
+    This class allows to run a DHCP server subprocess as root, and to terminate it
+    dhcp_server_daemon_exec_path contains the name of the executable that implements the DHCP server (dnsmasq is the only DHCP server supported)
+    ifname is the name of the network interface on which the DHCP server will run
+    if log is set to False, no logging will be performed on the logger object 
+    """
+    
+    # The following two variables should match the user and group associated with dnsmasq in your distribution's config file (the values below are the defaults for Debian, if no override exists in /etc/default/dnsmasq)
+    DNSMASQ_USER = 'dnsmasq'
+    DNSMASQ_GROUP = 'nogroup'
+    # This matches the PID file for Debian (this should thus be updated according to your distribution)
+    # Having the same PID file as your distribution allows to make sure only one instance of dnsmasq runs on the host (between instances launched by system V and by RF during tests) 
+    DNSMASQ_PIDFILE = '/var/run/dnsmasq/dnsmasq.pid'
+    
+    def __init__(self, dhcp_server_daemon_exec_path, ifname, log = True):
+        self._slave_dhcp_server_path = dhcp_server_daemon_exec_path
+        self._slave_dhcp_server_pid = None
+        self._ifname = ifname
+        self._log = log
+        self._all_processes_pid = []  # List of all subprocessed launched by us
+    
+    def start(self):
+        """
+        Start the slave process
+        """
+        dnsmasq_user = 'dnsmasq'
+        dnsmasq_group = 'nogroup'
+        dnsmasq_dir_pidfile = os.path.dirname(SlaveDhcpServerProcess.DNSMASQ_PIDFILE)
+        cmd = ['sudo', 'mkdir', dnsmasq_dir_pidfile]
+        subprocess.call(cmd, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)   # We don't care about the result, because directory may already exist but we should not fail for that
+        try:    # In a try/catch block to allow for undefined SlaveDhcpServerProcess.DNSMASQ_USER
+            dnsmasq_user = ''
+            dnsmasq_user = SlaveDhcpServerProcess.DNSMASQ_USER
+        except NameError:
+            pass
+
+        if dnsmasq_user:
+            cmd = ['sudo', 'chown', dnsmasq_user, dnsmasq_dir_pidfile]
+            subprocess.check_call(cmd)
+        
+        try:    # In a try/catch block to allow for undefined SlaveDhcpServerProcess.DNSMASQ_GROUP
+            dnsmasq_group = ''
+            dnsmasq_group = SlaveDhcpServerProcess.DNSMASQ_GROUP
+        except NameError:
+            pass
+        
+        if dnsmasq_group:
+            cmd = ['sudo', 'chgrp', dnsmasq_group, dnsmasq_dir_pidfile]
+            subprocess.check_call(cmd)
+        
+        cmd = ['sudo', self._slave_dhcp_server_path]
+        cmd += ['-i', self._ifname] # Specify the network interface on which we will serve IP addresses via DHCP 
+        if dnsmasq_user:
+            cmd += ['-u', dnsmasq_user]
+        if dnsmasq_group:
+            cmd += ['-g', dnsmasq_group]
+        
+        cmd += ['--no-resolv']  # Do not use the host's /etc/resolv.conf
+        cmd += ['--enable-dbus']    # Required?
+        ipv4_dhcp_start_addr = '192.168.0.128'
+        ipv4_dhcp_end_addr = '192.168.0.254'
+        ipv4_dhcp_leasetime = '3m' 
+        cmd += ['--dhcp-range=' + 'interface:' + self._ifname + ',' + ipv4_dhcp_start_addr + ',' + ipv4_dhcp_end_addr + ',' + ipv4_dhcp_leasetime]
+        cmd += ['--dhcp-authoritative'] # We are the only DHCP server on this test subnet
+        cmd += ['--log-dhcp']   # Log DHCP events to syslog
+        cmd += ['--leasefile-ro']   # Do not write to a lease file
+        cmd += ['-C', '-']  # Read config from stdin
+        cmd += ['-x', SlaveDhcpServerProcess.DNSMASQ_PIDFILE]
+        
+        subprocess.check_call(cmd + ['--test'], stdin=open(os.devnull, 'rb'))    # Dry-run to check the config (stdin is EOFed in order for -C arg to read no additional config)
+        logger.debug('Running command ' + str(cmd))
+        rc = subprocess.call(cmd, stdin=open(os.devnull, 'rb'))#, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)    # stdin is EOFed in order for -C arg to read no additional config
+        if rc == 0: # There was no error while launching dnsmasq
+            pass
+        elif rc == 2:   # Address already in use
+            logger.error('dnsmasq failed to bind DHCP server socket: Address already in use')
+            raise Exception('DhcpPortAlreadyUsed')
+        else:
+            logger.error('dnsmasq failed to stard')
+            raise Exception('SlaveFailed')
+        
+        # Read the PID from the PID file and add store this to the PID variable below
+        with open(SlaveDhcpServerProcess.DNSMASQ_PIDFILE, 'r') as f:
+            dnsmasq_pid_str = f.readline()
+        
+        if not dnsmasq_pid_str:
+            raise Exception('EmptyPIDFile')
+
+        self._slave_dhcp_server_pid = int(dnsmasq_pid_str)
+        self.addSlavePid(self._slave_dhcp_server_pid) # Add the PID of the child to the list of subprocesses (note: we get sudo's PID here, not the slave PID, that we will get later on via the PID file (see RemoteDhcpClientControl.getPid())
+        
+    def addSlavePid(self, pid):
+        """
+        Add a (child) PID to the list of PIDs that we should terminate when kill() is run
+        """
+        logger.debug('Adding slave PID ' + str(pid))
+        if not pid in self._all_processes_pid:  # Make sure we don't add twice a PID
+            self._all_processes_pid += [pid] # Add
+
+    def _checkPid(self, pid):        
+        """
+        Check For the existence of a UNIX PID
+        """
+        
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        else:
+            return True
+    
+    def _sudoKillSubprocessFromPid(self, pid, log = True, force = False, timeout = 1):
+        """
+        Kill a process from it PID (first send a SIGINT)
+        If argument force is set to True, wait a maximum of timeout seconds after SIGINT and send a SIGKILL if is still alive after this timeout
+        """
+
+        if log: logger.info('Sending SIGINT to slave PID ' + str(pid))
+        args = ['sudo', 'kill', '-SIGINT', str(pid)]    # Send Ctrl+C to slave DHCP client process
+        subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
+        
+        if force:
+            while self._checkPid(pid):  # Loop if slave process is still running
+                time.sleep(0.1)
+                timeout -= 0.1
+                if timeout <= 0:    # We have reached timeout... send a SIGKILL to the slave process to force termination
+                    if log: logger.info('Sending SIGKILL to slave PID ' + str(pid))
+                    args = ['sudo', 'kill', '-SIGKILL', str(pid)]    # Send Ctrl+C to slave DHCP client process
+                    subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
+                    break
+
+    def killLastPid(self, signum = 'SIGINT', log = True):
+        """
+        Send a signal to the last PID in the list (the most bottom child, which will discard sudo's PID
+        If no signal is specified, we will send a SIGINT, otherwise, we will use the specified signal
+        """
+        if len(self._all_processes_pid) == 0:
+            raise Exception('NoChildPID')
+        pid = self._all_processes[-1]   # Get last PID
+        if log: logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
+        args = ['sudo', 'kill', '-' + str(signum), str(pid)]    # Send the requested signal to slave process
+        subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
+            
+    def killSlavePids(self):
+        """
+        Stop all PIDs stored in the list self._all_processes_pid
+        This list actually contains the list of all recorded slave processes' PIDs
+        """
+        for pid in self._all_processes_pid:
+            self._sudoKillSubprocessFromPid(pid)
+            # The code below is commented out, we will just wipe out the whole  self._all_processes_pid[] list below
+            #while pid in self._all_processes_pid: self._all_processes_pid.remove(pid)   # Remove references to this child's PID in the list of children
+        
+        self._all_processes_pid = []    # Empty our list of PIDs
+        
+        self._slave_dhcp_server_pid = None    
+
+    def kill(self):
+        """
+        Stop the slave process(es)
+        """
+        
+        self.killSlavePids()
+        
+    def isRunning(self):
+        """
+        Is/Are the child process(es) currently running 
+        """
+        if not self.hasBeenStarted():
+            return False
+        
+        for pid in self._all_processes_pid:
+            if not self._checkPid(pid):
+                return False
+        
+        return True
+    
+    def hasBeenStarted(self):
+        """
+        Has the child process been started by us
+        """
+        return (not self._slave_dhcp_server_pid is None)
+
+
 class DhcpServerLibrary:
     """ Robot Framework DHCP Library """
 
@@ -242,13 +431,14 @@ class DhcpServerLibrary:
     ROBOT_LIBRARY_SCOPE = 'GLOBAL'
     ROBOT_LIBRARY_VERSION = '1.0'
 
-    def __init__(self, ifname = None, dhcp_server_pid_file_path = None):
+    def __init__(self, dhcp_server_daemon_exec_path, ifname = None):
         """Initialise the library
-        dhcp_server_pid_file_path is a PATH to the PID file storing the PID of the running instance of dnsmasq
+        dhcp_server_daemon_exec_path is a PATH to the DHCP server executable program (will be run as root via sudo)
         ifname is the interface on which we are observing the DHCP server status. If not provided, it will be mandatory to set it using Set Interface and before running Start
         """
-        self._dhcp_server_pid_file_path = dhcp_server_pid_file_path 
+        self._dhcp_server_daemon_exec_path =  dhcp_server_daemon_exec_path
         self._ifname = ifname
+        self._slave_dhcp_process = None # Slave DHCP server process not started
         self._dnsmasq_wrapper = None    # Underlying dnsmasq observer object
         
     def set_interface(self, ifname):
@@ -259,11 +449,13 @@ class DhcpServerLibrary:
         | Set Interface | 'eth0' |
         """
         
-        # Start an instance of the DHCP dnsmasq observer object on the specified interface
+        if not self._slave_dhcp_process is None:
+            raise Exception('DhcpClientAlreadyStarted')
+        
         self._ifname = ifname
         
     def get_current_interface(self, ifname):
-        """Get the interface on which the DHCP client is configured to run (it may not be started yet)
+        """Get the interface on which the DHCP server is configured to run (it may not be started yet)
         Will return None if no interface has been configured yet
         
         Example:
@@ -276,24 +468,35 @@ class DhcpServerLibrary:
         return self._ifname
 
     def start(self, ifname = None):
-        """Start the DHCP client
+        """Start the DHCP server
         
         Example:
         | Start | eth0 |
         """
         
         if not ifname is None:
-             self._ifname = ifname
+            self._ifname = ifname
         
         if self._ifname is None:
             raise Exception('NoInterfaceProvided')
         
-        self._dnsmasq_wrapper = DnsmasqDhcpServerWrapper(self._ifname, self._dhcp_server_pid_file_path)
+        self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname)
+        self._slave_dhcp_process.start()
+
+        self._dnsmasq_wrapper = DnsmasqDhcpServerWrapper(self._ifname)
         
         logger.debug('DHCP server is now being observed on ' + self._ifname)
         
+        
+    def reconnect(self):
+        """ Start again to observe a DHCP server already started beforehand
+        
+        Example:
+        | Reconnect |
+        """
+        
     def stop(self):
-        """ Stop the DHCP client
+        """ Stop the DHCP server
 
         Example:
         | Stop |
@@ -301,9 +504,13 @@ class DhcpServerLibrary:
 
         if not self._dnsmasq_wrapper is None:
             self._dnsmasq_wrapper.exit()
-        logger.debug('DHCP server not observed anymore on ' + self._ifname)
+            logger.debug('DHCP server not observed anymore on ' + self._ifname)
+        if not self._slave_dhcp_process is None:
+            self._slave_dhcp_process.kill()
+            logger.debug('DHCP server stopped on ' + self._ifname)
         
         self._dnsmasq_wrapper = None   # Destroy the dnsmasq wrapper object
+        self._slave_dhcp_process = None # Destroy the slave DHCP object
         
     
     def restart(self):
@@ -341,6 +548,7 @@ class DhcpServerLibrary:
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)    # Use Glib's mainloop as the default loop for all subsequent code
 
 if __name__ == '__main__':
+    atexit.register(cleanupAtExit)
     try:
         from console_logger import LOGGER as logger
     except ImportError:
@@ -358,12 +566,13 @@ if __name__ == '__main__':
     except NameError:
         pass
 
-    client = DhcpServerLibrary('eth1')
+    DHCP_SERVER_DAEMON = '/usr/sbin/dnsmasq'
+    client = DhcpServerLibrary(DHCP_SERVER_DAEMON, 'eth1')
     client.start()
     try:
         print('New DHCP events will be displayed in real time on the console')
         print('Press Ctrl+C or enter exit to stop this program')
-        print('Press enter to dump all DHCP leases or enter a MAC address to search the corresponding lease)
+        print('Press enter to dump all DHCP leases or enter a MAC address to search the corresponding lease')
         while True:
             mac_address = input()
             if mac_address == 'exit':
