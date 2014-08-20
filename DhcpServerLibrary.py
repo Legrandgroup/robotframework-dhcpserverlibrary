@@ -260,11 +260,24 @@ class SlaveDhcpServerProcess:
         self._ifname = ifname
         self._log = log
         self._all_processes_pid = []  # List of all subprocessed launched by us
+        self._lease_time = None
+    
+    def setLeaseTime(self, lease_time):
+        """
+        Specify the lease duration (in dnsmasq syntax)
+        This must be done prior to call start or we will raise an exception
+        """
+        if not self._slave_dhcp_server_pid is None:
+            raise Exception('DhcpServerAlreadyStarted')
+        else:
+            self._lease_time = lease_time
     
     def start(self):
         """
         Start the slave process
         """
+        if self.isRunning():
+            raise Exception('DhcpServerAlreadyStarted')
         dnsmasq_user = 'dnsmasq'
         dnsmasq_group = 'nogroup'
         dnsmasq_dir_pidfile = os.path.dirname(SlaveDhcpServerProcess.DNSMASQ_PIDFILE)
@@ -298,11 +311,12 @@ class SlaveDhcpServerProcess:
             cmd += ['-g', dnsmasq_group]
         
         cmd += ['--no-resolv']  # Do not use the host's /etc/resolv.conf
-        cmd += ['--enable-dbus']    # Required?
         ipv4_dhcp_start_addr = '192.168.0.128'
         ipv4_dhcp_end_addr = '192.168.0.254'
-        ipv4_dhcp_leasetime = '3m' 
-        cmd += ['--dhcp-range=' + 'interface:' + self._ifname + ',' + ipv4_dhcp_start_addr + ',' + ipv4_dhcp_end_addr + ',' + ipv4_dhcp_leasetime]
+        dhcp_range_arg = '--dhcp-range=' + 'interface:' + self._ifname + ',' + ipv4_dhcp_start_addr + ',' + ipv4_dhcp_end_addr
+        if not self._lease_time is None:
+            dhcp_range_arg += ',' + str(self._lease_time)
+        cmd += [dhcp_range_arg]
         cmd += ['--dhcp-authoritative'] # We are the only DHCP server on this test subnet
         cmd += ['--log-dhcp']   # Log DHCP events to syslog
         cmd += ['--leasefile-ro']   # Do not write to a lease file
@@ -310,8 +324,13 @@ class SlaveDhcpServerProcess:
         cmd += ['-x', SlaveDhcpServerProcess.DNSMASQ_PIDFILE]
         
         subprocess.check_call(cmd + ['--test'], stdin=open(os.devnull, 'rb'))    # Dry-run to check the config (stdin is EOFed in order for -C arg to read no additional config)
+        # Note: the only option that we need to provide as a configuration file (here directly on stdin) is enable-dbus
+        # This allows D-Bus signals to be sent out when leases are added/deleted
+        # Caveat: This is not the same as the --enable-dbus option on the command line
         logger.debug('Running command ' + str(cmd))
-        rc = subprocess.call(cmd, stdin=open(os.devnull, 'rb'))#, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)    # stdin is EOFed in order for -C arg to read no additional config
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE) # stdin will be used as a pipe to send the config (see -C arg of dnsmasq)
+        proc.communicate(input='enable-dbus')
+        rc = proc.returncode
         if rc == 0: # There was no error while launching dnsmasq
             pass
         elif rc == 2:   # Address already in use
@@ -378,7 +397,7 @@ class SlaveDhcpServerProcess:
         """
         if len(self._all_processes_pid) == 0:
             raise Exception('NoChildPID')
-        pid = self._all_processes[-1]   # Get last PID
+        pid = self._all_processes_pid[-1]   # Get last PID
         if log: logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
         args = ['sudo', 'kill', '-' + str(signum), str(pid)]    # Send the requested signal to slave process
         subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
@@ -434,23 +453,21 @@ class DhcpServerLibrary:
     def __init__(self, dhcp_server_daemon_exec_path, ifname = None):
         """Initialise the library
         dhcp_server_daemon_exec_path is a PATH to the DHCP server executable program (will be run as root via sudo)
-        ifname is the interface on which we are observing the DHCP server status. If not provided, it will be mandatory to set it using Set Interface and before running Start
+        ifname is the interface on which we are observing the DHCP server status. If not provided, it will be mandatory to set it using Set Interface and before (or when) running Start
         """
         self._dhcp_server_daemon_exec_path =  dhcp_server_daemon_exec_path
-        self._ifname = ifname
+        self._ifname = ifname   # The interface on which we are currently observing the DHCP server (there could be several DHCP servers on several interfaces, but we are working on only one at a time, and it is kept in this variable)
         self._slave_dhcp_process = None # Slave DHCP server process not started
         self._dnsmasq_wrapper = None    # Underlying dnsmasq observer object
+        self._lease_time = None
         
     def set_interface(self, ifname):
         """Set the current DHCP server interface on which we are working
-        This must be done prior to calling Start or subsequent actions will fail
+        This must be done prior (or when) the Start keyword is called or subsequent actions will fail
         
         Example:
         | Set Interface | 'eth0' |
         """
-        
-        if not self._slave_dhcp_process is None:
-            raise Exception('DhcpClientAlreadyStarted')
         
         self._ifname = ifname
         
@@ -467,12 +484,27 @@ class DhcpServerLibrary:
         
         return self._ifname
 
+    def set_lease_time(self, lease_time='120'):
+        """Set the lease duration of the DHCP server.
+        This needs to be done before the DHCP server is started or it will have no effect
+        Format can include units, eg: 3m, 5h
+        2 minutes is the minimum supported by the DHCP server for now
+        
+        Example:
+        | Set Lease Time | 1h |
+        """
+        self._lease_time = str(lease_time)
+        
+    
     def start(self, ifname = None):
-        """Start the DHCP server
+        """Start the DHCP server and monitors its leases
         
         Example:
         | Start | eth0 |
         """
+        
+        if not self._slave_dhcp_process is None:
+            raise Exception('DhcpServerAlreadyStarted') # For now, due to dnsmasq limitations, we can only discuss with (and thus start) one instance on dnsmasq on only one network interface
         
         if not ifname is None:
             self._ifname = ifname
@@ -481,19 +513,49 @@ class DhcpServerLibrary:
             raise Exception('NoInterfaceProvided')
         
         self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname)
+        if not self._lease_time is None:
+            self._slave_dhcp_process.setLeaseTime(self._lease_time)
         self._slave_dhcp_process.start()
 
-        self._dnsmasq_wrapper = DnsmasqDhcpServerWrapper(self._ifname)
-        
-        logger.debug('DHCP server is now being observed on ' + self._ifname)
+        self._monitor_dhcp_server()
         
         
-    def reconnect(self):
-        """ Start again to observe a DHCP server already started beforehand
+    def restart_monitoring_server(self, ifname = None):
+        """ Start again monitoring the leases of a DHCP server that has already started beforehand (using keyword Start)
         
         Example:
-        | Reconnect |
+        | Restart Monitoring Server |
+        or
+        | Restart Monitoring Server | eth0 |
         """
+        
+        if not ifname is None:
+            self._ifname = ifname
+        
+        if self._ifname is None:
+            raise Exception('NoInterfaceProvided')
+
+        self._dnsmasq_wrapper = DnsmasqDhcpServerWrapper(self._ifname)
+        logger.debug('DHCP server is now being observed on ' + self._ifname)
+        if not self._slave_dhcp_process is None:
+            self._slave_dhcp_process.killLastPid('SIGHUP')  # Send sighup to repopulate lease database 
+
+
+    def _monitor_dhcp_server(self, ifname = None):
+        self.restart_monitoring_server(ifname)
+        
+    def stop_monitoring_server(self):
+        """ Stop monitoring the leases of the currently observed DHCP server (but don't stop the DHCP server itself).
+        If the server needs to be stopped, use the keyword Stop
+        
+        Example:
+        | Stop Monitoring Server |
+        """
+        
+        if not self._dnsmasq_wrapper is None:
+            self._dnsmasq_wrapper.exit()
+            logger.debug('DHCP server not observed anymore on ' + self._ifname)
+        self._dnsmasq_wrapper = None
         
     def stop(self):
         """ Stop the DHCP server
@@ -502,14 +564,10 @@ class DhcpServerLibrary:
         | Stop |
         """
 
-        if not self._dnsmasq_wrapper is None:
-            self._dnsmasq_wrapper.exit()
-            logger.debug('DHCP server not observed anymore on ' + self._ifname)
+        self.stop_monitoring_server()
         if not self._slave_dhcp_process is None:
             self._slave_dhcp_process.kill()
             logger.debug('DHCP server stopped on ' + self._ifname)
-        
-        self._dnsmasq_wrapper = None   # Destroy the dnsmasq wrapper object
         self._slave_dhcp_process = None # Destroy the slave DHCP object
         
     
