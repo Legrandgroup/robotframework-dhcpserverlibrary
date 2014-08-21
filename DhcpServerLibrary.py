@@ -486,7 +486,106 @@ class SlaveDhcpServerProcess:
 
 
 class DhcpServerLibrary:
-    """ Robot Framework DHCP Library """
+    """ Robot Framework DHCP server Library
+
+    This library utilizes Python's
+    [http://docs.python.org/2.7/library/subprocess.html|subprocess]
+    module and dbus-python [http://dbus.freedesktop.org/doc/dbus-python/doc/tutorial.html]
+    as well as the Python module [https://docs.python.org/2.7/library/signal.html]
+    
+    The library has following usage:
+
+    - Running a DHCP server on a specific network interface and monitor this
+      DHCP server to get informations of the current DHCP leases (MAC address and
+      associated IP address)
+
+    == Table of contents ==
+
+    - `Requirement on the test machine`
+    - `Specifying environment to the library`
+    - `Requirements for Setup/Teardown`
+    - `Warning on dnsmasq concurrent execution`
+
+    = Requirement on the test machine =
+    
+    A few checks must be performed on the machine on which this library will
+    run :
+    - A dnsmasq DHCP server must be installed on the test machine (but NOT
+    automatically running via system V init)
+    - The D-Bus system bus must have appropriate permissions to allow messages
+    on the BUS `uk.org.thekelleys.dnsmasq`. This is usually dones by distribution
+    maintainers when installing dnsmasq as a distribution package, if this is
+    not the case, a file stored in /etc/d-bus-1/system.d must be created
+    - The pybot process must have permissions to run sudo on kill and on
+    the slave DHCP server (dnsmasq)
+    
+    = Specifying environment to the library =
+    
+    Before being able to run a DHCP client on an interface, this library must
+    be provided with the path to the DHCP server exec (also called slave
+    in this library).
+    This exec should point to dnsmasq
+    
+    Also, the network interface on which the DHCP client service will run
+    must be provided either :
+    - when importing the library with the keyword `Library` 
+    - by using the keyword `Set Interface` before using the keyword `Start`
+    - by providing it as an optional argument when using the keyword `Start`
+        
+    = Requirements for Setup/Teardown =
+
+    Whenever `DhcpServerLibrary.Start` is run within a given scope, it is
+    mandatory to make sure than `DhcpServerLibrary.Stop` will also be called
+    before or at Teardown to avoid runaway DHCP servers that would continue
+    to server IP addresses after the test finishes
+        
+    = Warning on dnsmasq concurrent execution =
+    
+    Because it uses dnsmasq, this library does not support concurrent
+    execution of more that one DHCP server (on network interfaces).
+    The architecture of keywords has been thought to handle several
+    interfaces, by switching the interface on which we issue DHCP server
+    commands.
+    However, although dnsmasq does support multiple simultaneous instances,
+    each running on a different network interface, when sending signals over
+    D-Bus, it does not mention the interface to which a signal applies (when
+    leases are added, updated or deleted).
+    Thus having several simultaneous dnsmasq instances running would lead
+    all concurrent lease databases to all contain the whole leases for all
+    interfaces.
+    For now, the library is thus restricted to one DHCP server at a time,
+    this meanse keyword `DhcpServerLibrary.Start` can only be run once or
+    it will raise an exception. This also means that internally, the python
+    code only stores one instance of DHCP wrapper, and thus only one lease
+    database  
+    
+    = Troubleshooting =
+    
+    When starting dnsmasq, we first perform a --test dry-run of the config
+    file. Troubleshooting logs from dnsmasq itself should thus appears on
+    stderr
+    If dnsmasq is not run as root (no sudo), the `Start` keyword will fail
+    with an exception
+    When dnsmasq is started, it will try to bind to the DHCP server port:
+    if another instance of DHCP server is already running on the specified
+    interface, dnsmasq will thus fail and we catch its exit value to raise
+    the appropriate exception
+
+    = Example =
+
+    | ***** Settings *****
+    | Library    DhcpServerLibrary    /usr/sbin/dnsmasq
+    | Suite Setup    `DhcpServerLibrary.Start`   eth1    5m
+    | Suite Teardown    `DhcpServerLibrary.Stop`
+    |
+    | ***** Test Cases *****
+    | Example
+    |     `DhcpServerLibrary.Restart Monitoring Server` eth1
+    |     `DhcpServerLibrary.Wait Lease | 00:04:74:02:19:77 |
+    |     `DhcpServerLibrary.Reset Lease Database |
+    |     `DhcpServerLibrary.Check Dhcp Client On | 00:04:74:02:19:77 |
+    |     ${temp_scalar}=    `DhcpSLibrary.Find IP For Mac`
+    """
 
     ROBOT_LIBRARY_DOC_FORMAT = 'ROBOT'
     ROBOT_LIBRARY_SCOPE = 'GLOBAL'
@@ -539,7 +638,7 @@ class DhcpServerLibrary:
         self._lease_time = str(lease_time)
         
     
-    def start(self, ifname = None):
+    def start(self, ifname = None, lease_time = None):
         """Start the DHCP server and monitors its leases
         
         Example:
@@ -554,6 +653,9 @@ class DhcpServerLibrary:
         
         if self._ifname is None:
             raise Exception('NoInterfaceProvided')
+        
+        if not lease_time is None:
+            self.set_lease_time(lease_time)
         
         self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname)
         if not self._lease_time is None:
@@ -666,9 +768,14 @@ class DhcpServerLibrary:
     
     def check_dhcp_client_on(self, mac, timeout = None):
         """ Check that the machine with the MAC address provided as argument mac is in DHCP client mode (either has already been allocated a lease or will renew its lease during the duration of the check)
+        If it is needed to make sure DHCP is still on right now (and not only that a lease has been allocated), call keyword Reset Lease Database before
         Will fail if the MAC address provided has no lease during the specified timeout.
         If timeout is not provided, we will wait for half of the lease time set using keyword Set Lease Time
         If timeout is 0, we will check that the lease is currently known right now, or fail otherwise
+        
+        Example:
+        | Reset Lease Database |
+        | Check Dhcp Client On | 00:04:74:02:19:77 |
         """ 
         if timeout is None:
             if self._lease_time is None:
@@ -681,9 +788,14 @@ class DhcpServerLibrary:
     
     def check_dhcp_client_off(self, mac, timeout = None):
         """ Check that the machine with the MAC address provided as argument mac is not in DHCP client mode (has never been allocated a lease or has lost it before calling this keyword)
+        If it is needed to make sure DHCP is off right now (even if a lease may has been allocated previously), call keyword Reset Lease Database before
         Will fail if the MAC address provided has a lease currently valid or that is allocated during the specified timeout.
         If timeout is not provided, we will wait for half of the lease time set using keyword Set Lease Time
         If timeout is 0, we will check that there is no known lease right now, or fail otherwise
+        
+        Example: 
+        | Reset Lease Database |
+        | Check Dhcp Client Off | 00:04:74:02:19:77 |
         """
         if timeout is None:
             if self._lease_time is None:
