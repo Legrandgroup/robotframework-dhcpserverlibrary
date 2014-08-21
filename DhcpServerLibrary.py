@@ -66,6 +66,8 @@ class DhcpServerLeaseList:
         except TypeError:
             if raise_exceptions:
                 raise
+        except KeyError:
+            logger.warning('Entry for MAC address ' + hw_address + ' cannot be deleted because it does not exist (maybe database has been reset in the meantime)')
     
     def get_ipv4address_for_hwaddress(self, hw_address):
         """
@@ -100,7 +102,10 @@ class DnsmasqDhcpServerWrapper:
         """
         self._lease_database = DhcpServerLeaseList()
         self._ifname = ifname   # We store the interface but dnsmasq does not provide information concerning the interface in its D-Bus announcements... so we cannot use it for now
-        # This also means that we can have only one instance of dnsmasq on the machine, or leases for all interfaces will mix in our database 
+        # This also means that we can have only one instance of dnsmasq on the machine, or leases for all interfaces will mix in our database
+        
+        self._watched_macaddr = None    # The MAC address on which we are currently waiting for a lease to be allocated (or renewed)
+        self.watched_macaddr_got_lease_event = threading.Event() # At initialisation, event is cleared 
 
         self._dbus_loop = gobject.MainLoop()
         self._bus = dbus.SystemBus()
@@ -142,6 +147,8 @@ class DnsmasqDhcpServerWrapper:
         self._dbus_loop_thread.setDaemon(True)    # D-Bus loop should be forced to terminate when main program exits
         self._dbus_loop_thread.start()
         
+        self._bus.watch_name_owner(DnsmasqDhcpServerWrapper.DNSMASQ_DBUS_NAME, self._handleBusOwnerChanged) # Install a callback to run when the bus owner changes
+        
         self._getversion_unlock_event = threading.Event() # Create a new threading event that will allow the GetVersion() D-Bus call below to execute within a timed limit 
 
         self._getversion_unlock_event.clear()
@@ -173,7 +180,7 @@ class DnsmasqDhcpServerWrapper:
             self._dbus_loop.quit()
         
         self._dbus_loop = None
-
+    
     # D-Bus-related methods
     def _loopHandleDbus(self):
         """
@@ -203,24 +210,57 @@ class DnsmasqDhcpServerWrapper:
         
     def _handleDhcpLeaseAdded(self, ipaddr, hwaddr, hostname, **kwargs):
         """
-        Method called when receiving the DhcpLeaseAdded D-Bus signal from dnsmasq
+        Callback method called when receiving the DhcpLeaseAdded D-Bus signal from dnsmasq
         """
-        logger.debug('Got signal DhcpLeaseAdded for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.addLease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        ipaddr = str(ipaddr)
+        hwaddr = str(hwaddr).lower()
+        logger.debug('Got signal DhcpLeaseAdded for IP=' + ipaddr + ', MAC=' + hwaddr)
+        self._lease_database.addLease(ipaddr, hwaddr)
+        if not self._watched_macaddr is None:    # We are currently waiting for a lease to be allocated (or renewed) on a specific MAC address
+            if self._watched_macaddr == hwaddr:   # Both MAC addresses match, so trigger the corresponding event
+                self.watched_macaddr_got_lease_event.set()
           
     def _handleDhcpLeaseUpdated(self, ipaddr, hwaddr, hostname, **kwargs):
         """
-        Method called when receiving the DhcpLeaseUpdated D-Bus signal from dnsmasq
+        Callback method called when receiving the DhcpLeaseUpdated D-Bus signal from dnsmasq
         """
-        logger.debug('Got signal DhcpLeaseUpdated for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.updateLease(str(ipaddr), str(hwaddr))    # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        ipaddr = str(ipaddr)
+        hwaddr = str(hwaddr).lower()
+        # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        logger.debug('Got signal DhcpLeaseUpdated for IP=' + ipaddr + ', MAC=' + hwaddr)
+        self._lease_database.updateLease(ipaddr, hwaddr)
+        if not self._watched_macaddr is None:    # We are currently waiting for a lease to be allocated (or renewed) on a specific MAC address
+            if self._watched_macaddr == hwaddr:   # Both MAC addresses match, so trigger the corresponding event
+                self.watched_macaddr_got_lease_event.set()
         
     def _handleDhcpLeaseDeleted(self, ipaddr, hwaddr, hostname, **kwargs):
         """
         Method called when receiving the DhcpLeaseDeleted D-Bus signal from dnsmasq
         """
-        logger.debug('Got signal DhcpLeaseDeleted for IP=' + str(ipaddr) + ', MAC=' + str(hwaddr))
-        self._lease_database.deleteLease(str(hwaddr))  # Note: hwaddr is  of type dbus.String, so convert it to python native str
+        ipaddr = str(ipaddr)
+        hwaddr = str(hwaddr).lower()
+        # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
+        logger.debug('Got signal DhcpLeaseDeleted for IP=' + ipaddr + ', MAC=' + hwaddr)
+        self._lease_database.deleteLease(hwaddr)
+        
+    def _handleBusOwnerChanged(self, new_owner):
+        """
+        Callback called when our D-Bus bus owner changes 
+        """
+        if new_owner == '':
+            logger.warn('No owner anymore for bus name ' + DnsmasqDhcpServerWrapper.DNSMASQ_DBUS_NAME)
+            raise Exception('LostDhcpSlave')
+        else:
+            pass # Owner exists
+    
+    def setMacAddrToWatch(self, mac):
+        """
+        Sets a MAC address to monitor.
+        When this MAC address has renews/gets a lease after this method has been called, self.watched_macaddr_got_lease_event threading event will be set  
+        """
+        self.watched_macaddr_got_lease_event.clear()    # Make sure the threading event is cleared (will be set in _handleDhcpLeaseAdded and _handleDhcpLeaseUpdated)
+        self._watched_macaddr = str(mac).lower()    # Store the expected MAC address in lowercase
         
     def getLeasesList(self):
         """
@@ -234,7 +274,9 @@ class DnsmasqDhcpServerWrapper:
         """
         Returns the IP address allocated by the DHCP server to the host whose MAC address matches the provided argument mac
         If this MAC address is unknown, will return None
+        MAC address is case insensitive
         """
+        mac = str(mac).lower()
         return self._lease_database.get_ipv4address_for_hwaddress(mac)
     
     
@@ -449,6 +491,7 @@ class DhcpServerLibrary:
     ROBOT_LIBRARY_DOC_FORMAT = 'ROBOT'
     ROBOT_LIBRARY_SCOPE = 'GLOBAL'
     ROBOT_LIBRARY_VERSION = '1.0'
+    LEASE_DURATION_MARGIN = float(10/100)   # The margin for a lease to expire (we allow the renew to be 10% late comparing to the normal lease expiry
 
     def __init__(self, dhcp_server_daemon_exec_path, ifname = None):
         """Initialise the library
@@ -542,7 +585,11 @@ class DhcpServerLibrary:
 
 
     def _monitor_dhcp_server(self, ifname = None):
+        """
+        Private method to start monitoring the DHCP server
+        """
         self.restart_monitoring_server(ifname)
+        
         
     def stop_monitoring_server(self):
         """ Stop monitoring the leases of the currently observed DHCP server (but don't stop the DHCP server itself).
@@ -556,6 +603,7 @@ class DhcpServerLibrary:
             self._dnsmasq_wrapper.exit()
             logger.debug('DHCP server not observed anymore on ' + self._ifname)
         self._dnsmasq_wrapper = None
+        
         
     def stop(self):
         """ Stop the DHCP server
@@ -581,6 +629,7 @@ class DhcpServerLibrary:
         self.stop()
         self.start()
         
+        
     def log_leases(self):
         """ Print all current leases to the log
         
@@ -592,6 +641,7 @@ class DhcpServerLibrary:
         
         logger.info('Current leases in DHCP server database (printed as [(hwaddr, ipv4addr),...] tuple list):\n' + str(self._dnsmasq_wrapper.getLeasesList()))
 
+    
     def find_ip_for_mac(self, mac):
         """ Find the IP address allocated by the DHCP server to the machine with the MAC address provided as argument
         Will return None if the MAC address is not known by the DHCP server 
@@ -602,6 +652,75 @@ class DhcpServerLibrary:
         | '192.168.0.2' |
         """
         return self._dnsmasq_wrapper.getIpForMac(mac)
+    
+    
+    def reset_lease_database(self):
+        """ Forget about all previously known leases learnt from the DHCP server
+        
+        Example:
+        | Reset Lease Database |
+        | Check Dhcp Client On | 00:04:74:02:19:77 | 30 |
+        """
+        self._dnsmasq_wrapper.reset()
+        
+    
+    def check_dhcp_client_on(self, mac, timeout = None):
+        """ Check that the machine with the MAC address provided as argument mac is in DHCP client mode (either has already been allocated a lease or will renew its lease during the duration of the check)
+        Will fail if the MAC address provided has no lease during the specified timeout.
+        If timeout is not provided, we will wait for half of the lease time set using keyword Set Lease Time
+        If timeout is 0, we will check that the lease is currently known right now, or fail otherwise
+        """ 
+        if timeout is None:
+            if self._lease_time is None:
+                raise Exception('NoLeaseTimeProvided')
+            else:
+                timeout = int((DhcpServerLibrary.LEASE_DURATION_MARGIN+1.0) * float(self._lease_time)/ 2) # Calculate the timeout based on lease time and predefined margin
+        
+        self.wait_lease(mac, timeout)
+    
+    
+    def check_dhcp_client_off(self, mac, timeout = None):
+        """ Check that the machine with the MAC address provided as argument mac is not in DHCP client mode (has never been allocated a lease or has lost it before calling this keyword)
+        Will fail if the MAC address provided has a lease currently valid or that is allocated during the specified timeout.
+        If timeout is not provided, we will wait for half of the lease time set using keyword Set Lease Time
+        If timeout is 0, we will check that there is no known lease right now, or fail otherwise
+        """
+        if timeout is None:
+            if self._lease_time is None:
+                raise Exception('NoLeaseTimeProvided')
+            else:
+                timeout = int((DhcpServerLibrary.LEASE_DURATION_MARGIN+1.0) * float(self._lease_time)/ 2) # Calculate the timeout based on lease time and predefined margin
+        
+        try:   # We work reverse, so we will fail if the lease was obtained. In order to do this, catch exceptions from wait_lease()
+            self.wait_lease(mac, timeout)
+        except:
+            return
+        raise Exception('Existing lease for ' + str(mac))
+
+    
+    def wait_lease(self, mac, timeout = None):
+        """Wait until host with the specified MAC address gets a lease
+        Will return immediately if the lease is already valid
+        Otherwise, we Will wait until the specified timeout for the lease to be allocated.
+        If timeout is 0, None or we have no lease for the specified host during the timeout, this keyword will fail
+        
+        Example:
+        | Wait Lease | 00:04:74:02:19:77 | 30 |
+        """
+        ip = self._dnsmasq_wrapper.getIpForMac(mac)
+        if not ip is None:
+            logger.info('There is a lease previously seen for device ' + str(mac) + ' associated with IP address ' + str(ip))
+            return  # Succeed
+        try:
+            if timeout is None or timeout == 0:
+                raise Exception()   # Shoudl fail, we are not allowed to wait
+            else:   # There is a timeout, so carry on waiting for this lease during this timeout
+                self._dnsmasq_wrapper.setMacAddrToWatch(mac)
+                if not self._dnsmasq_wrapper.watched_macaddr_got_lease_event.wait(timeout):
+                    raise Exception()
+        except:
+            raise Exception('No lease known for ' + str(mac))
+    
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)    # Use Glib's mainloop as the default loop for all subsequent code
 
@@ -644,6 +763,14 @@ if __name__ == '__main__':
                     print('MAC address ' + mac_address + ' is not known by DHCP server')
                 else:
                     print('Host with MAC address ' + mac_address + ' has IPv4 address ' + str(ipv4))
+                    client.reset_lease_database()
+                    print('Checking that lease is renewed within 240s')
+                    client.check_dhcp_client_on(mac_address, 240)
+                    print('DHCP client is On')
+                    client.reset_lease_database()
+                    print('Checking that lease is not renewed within the next 240s')
+                    client.check_dhcp_client_off(mac_address, 240)
+                    print('DHCP client is Off')
     finally:
         client.stop()
 else:
