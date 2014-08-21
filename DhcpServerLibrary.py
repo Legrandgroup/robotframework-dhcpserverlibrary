@@ -215,7 +215,7 @@ class DnsmasqDhcpServerWrapper:
         # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
         ipaddr = str(ipaddr)
         hwaddr = str(hwaddr).lower()
-        logger.debug('Got signal DhcpLeaseAdded for IP=' + ipaddr + ', MAC=' + hwaddr)
+        logger.info('Got signal DhcpLeaseAdded for IP=' + ipaddr + ', MAC=' + hwaddr)
         self._lease_database.addLease(ipaddr, hwaddr)
         if not self._watched_macaddr is None:    # We are currently waiting for a lease to be allocated (or renewed) on a specific MAC address
             if self._watched_macaddr == hwaddr:   # Both MAC addresses match, so trigger the corresponding event
@@ -241,7 +241,7 @@ class DnsmasqDhcpServerWrapper:
         ipaddr = str(ipaddr)
         hwaddr = str(hwaddr).lower()
         # Note: ipaddr and hwaddr are of type dbus.String, so convert them to python native str
-        logger.debug('Got signal DhcpLeaseDeleted for IP=' + ipaddr + ', MAC=' + hwaddr)
+        logger.info('Got signal DhcpLeaseDeleted for IP=' + ipaddr + ', MAC=' + hwaddr)
         self._lease_database.deleteLease(hwaddr)
         
     def _handleBusOwnerChanged(self, new_owner):
@@ -516,6 +516,18 @@ class DhcpServerLibrary:
     on the BUS `uk.org.thekelleys.dnsmasq`. This is usually dones by distribution
     maintainers when installing dnsmasq as a distribution package, if this is
     not the case, a file stored in /etc/d-bus-1/system.d must be created
+    For example, the following lines in a file stored in /etc/d-bus-1/system.d
+    would do the job (but you may want to setup more restrictive permissions):
+    <!DOCTYPE busconfig PUBLIC
+    "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+    "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+    <busconfig>
+      <policy context="default">
+        <allow own="uk.org.thekelleys.dnsmasq"/>
+        <allow send_destination="uk.org.thekelleys.dnsmasq"/>
+      </policy>
+    </busconfig>
+
     - The pybot process must have permissions to run sudo on kill and on
     the slave DHCP server (dnsmasq)
     
@@ -538,7 +550,7 @@ class DhcpServerLibrary:
     mandatory to make sure than `DhcpServerLibrary.Stop` will also be called
     before or at Teardown to avoid runaway DHCP servers that would continue
     to server IP addresses after the test finishes
-        
+
     = Warning on dnsmasq concurrent execution =
     
     Because it uses dnsmasq, this library does not support concurrent
