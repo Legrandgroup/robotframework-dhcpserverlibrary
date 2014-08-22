@@ -830,14 +830,16 @@ class DhcpServerLibrary:
         
         Example:
         | Wait Lease | 00:04:74:02:19:77 | 30 |
+        =>
+        | '192.168.0.2' |
         """
         ip = self._dnsmasq_wrapper.getIpForMac(mac)
         if not ip is None:
             logger.info('There is a lease previously seen for device ' + str(mac) + ' associated with IP address ' + str(ip))
-            return  # Succeed
+            return ip # Succeed
         try:
             if timeout is None or timeout == 0:
-                raise Exception()   # Shoudl fail, we are not allowed to wait
+                raise Exception()   # Should fail, we are not allowed to wait
             else:   # There is a timeout, so carry on waiting for this lease during this timeout
                 self._dnsmasq_wrapper.setMacAddrToWatch(mac)
                 if not self._dnsmasq_wrapper.watched_macaddr_got_lease_event.wait(timeout):
