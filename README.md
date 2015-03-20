@@ -194,7 +194,7 @@ renew their lease at half the lease time).
 If not timeout is provided, and **`Set Lease Time`** has not been invoked before,
 and exception will be raised.
 
-#### `Check Dhcp Client Off
+#### `Check Dhcp Client Off`
 
 *Makes sure a DHCP client currently has not valid lease and does not get one
 within the timeout provided as argument*
