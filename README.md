@@ -122,14 +122,14 @@ called. Thus, the best is to take the habit to use **`Stop`** in the teardown
 
 #### `Set Interface`
 
-*Set the network interface on which the **`Start`**  and
-**`Restart Monitoring Server`** keywords will be applied*
+*Set the network interface on which the `Start` and
+`Restart Monitoring Server` keywords will be applied*
 
 eg: `eth1`
 
 #### `Get Current Interface`
 
-*Get the network interface configured using **`Set Interface`** *
+*Get the network interface configured using `Set Interface`*
 
 #### `Stop Monitoring Server`
 
@@ -145,7 +145,7 @@ will carry on running)
 #### `Restart Monitoring Server`
 
 *Restart monitoring DHCP leases updates on the DHCP server (that would have
-been stopped using **`Stop Monitoring Server`** *
+been stopped using `Stop Monitoring Server`*
 
 #### `Set Lease Time`
 
@@ -161,36 +161,51 @@ Note: This keyword will have no impact if invoked after keyword **`Start`**
 
 #### `Find IP For Mac`
 
-*Recherche l'adresse IP correspondant à une adresse MAC*
+*Search a IP address lease associated with the specified MAC address*
 
-Si un bail existe pour cette adresse MAC, l'adresse IP est renvoyée en valeur de retour, sinon, None est renvoyé (mais le mot clé n'échouera pas)
+If a DHCP lease exists for this MAC address, the corresponding IP address is
+returned. Otherwise, None is returned (but the keyword will not fail)
 
 #### `Wait Lease`
 
-*Attend qu'un bail DHCP soit alloué au client DHCP dont l'adresse MAC est fournie en paramètre*
+*Wait until a DHCP lease is allocated the the DHCP client with the specified
+MAC address*
 
-Un paramètre de timeout peut être fourni pour borner le temps d'attente. Si ce timeout n'est pas fourni, le mot clé n'attendra aucun délai (et échouera ou passera immédiatement)
-Renvoie l'adresse IP allouée en valeur de retour
+A optional timeout can be provided to set a maximum wait duration. If no timeout
+is provided, this keyword will immediately return (and will succeed of fail
+immediately)
+Returns the IP address for the lease
 
 #### `Reset Lease Database`
 
-*Oublie tous les clients DHCP appris par le serveur DHCP jusqu'à présent (utile juste avant les mots clés Check Dhcp Client On et Check Dhcp Client Off)*
+*Forget about all DHCP client learnt by the DhcpServerLibrary until now
+(useful just before keyword `Check Dhcp Client On` and `Check Dhcp Client Off`*
 
 #### `Check Dhcp Client On`
 
-*Vérifie qu'un client DHCP a actuellement un bail DHCP valide ou le renouvelle dans le délai fourni en paramètre*
+*Makes sure a DHCP client currently has a valid lease or does get one within the
+timeout provided as argument*
 
-Si un délai 0 est fourni, la vérification se fait immédiatement sur la base de données des baux en vigueur au moment de l'invocation de ce mot-clé
-Si aucun délai n'est fourni, mais que Set Lease Time a été appelé auparavant, un demi-bail DHCP sera pris comme délai par défaut.
-Si aucun délai n'est fourni et que Set Lease Time n'a pas été appelé pour fixer une durée de bail spécifique, une exception sera levée et le testcase échouera.
+If a timeout of 0 is provided, the check is performed immediately on the current
+lease database.
+If not timeout is provided, but **`Set Lease Time`** has been invoked before,
+half a DHCP lease will be used as timeout (because DHCP client typically need to
+renew their lease at half the lease time).
+If not timeout is provided, and **`Set Lease Time`** has not been invoked before,
+and exception will be raised.
 
 #### `Check Dhcp Client Off
 
-*Vérifie qu'un client DHCP n'a actuellement pas de bail DHCP valide ou le renouvelle dans le délai fourni en paramètre*
+*Makes sure a DHCP client currently has not valid lease and does not get one
+within the timeout provided as argument*
 
-Si un délai 0 est fourni, la vérification se fait immédiatement sur la base de données des baux en vigueur au moment de l'invocation de ce mot-clé
-Si aucun délai n'est fourni, mais que Set Lease Time a été appelé auparavant, un demi-bail DHCP sera pris comme délai par défaut.
-Si aucun délai n'est fourni et que Set Lease Time n'a pas été appelé pour fixer une durée de bail spécifique, une exception sera levée et le testcase échouera.
+If a timeout of 0 is provided, the check is performed immediately on the current
+lease database.
+If not timeout is provided, but **`Set Lease Time`** has been invoked before,
+half a DHCP lease will be used as timeout (because DHCP client typically need to
+renew their lease at half the lease time).
+If not timeout is provided, and **`Set Lease Time`** has not been invoked before,
+and exception will be raised.
 
 ## For developpers
 
