@@ -145,7 +145,7 @@ will carry on running)
 #### `Restart Monitoring Server`
 
 *Restart monitoring DHCP leases updates on the DHCP server (that would have
-been stopped using `Stop Monitoring Server`*
+been stopped using `Stop Monitoring Server`*)
 
 #### `Set Lease Time`
 
@@ -179,7 +179,7 @@ Returns the IP address for the lease
 #### `Reset Lease Database`
 
 *Forget about all DHCP client learnt by the DhcpServerLibrary until now
-(useful just before keyword `Check Dhcp Client On` and `Check Dhcp Client Off`*
+(useful just before keyword `Check Dhcp Client On` and `Check Dhcp Client Off`*)
 
 #### `Check Dhcp Client On`
 
@@ -204,8 +204,8 @@ lease database.
 If not timeout is provided, but **`Set Lease Time`** has been invoked before,
 half a DHCP lease will be used as timeout (because DHCP client typically need to
 renew their lease at half the lease time).
-If not timeout is provided, and **`Set Lease Time`** has not been invoked before,
-and exception will be raised.
+If not timeout is provided, and **`Set Lease Time`** has not been invoked
+before, and exception will be raised.
 
 ## For developpers
 
