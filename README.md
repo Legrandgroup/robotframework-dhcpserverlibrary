@@ -23,7 +23,8 @@ DhcpServerLibrary is open source software licensed under
 
 ### Installing dnsmasq
 
-This RobotFramework library uses dnsmasq as a DHCP server.
+This RobotFramework library uses
+[dnsmasq](http://www.thekelleys.org.uk/dnsmasq/doc.html) as a DHCP server.
 
 dnsmasq is indeed able to notify, via D-Bus signals, any change in its lease
 file (addition/renewal or deletion of a lease)
@@ -132,21 +133,27 @@ eg: `eth1`
 
 #### `Stop Monitoring Server`
 
-*Arrête de superviser les ajouts/mises à jour/supression de baux DHCP du
-serveur DHCP*
+*Stop monitoring DHCP leases updates on the DHCP server*
 
-Ceci n'arrête pas le serveur DHCP, mais après ce mot-clé, la librairie ne prendra plus en compte les changements de baux DHCP jusqu'à l'appel de **`Restart Monitoring Server`**
-Il faudra donc bien s'assurer également d'appeler **`Stop`** avant de terminer RobotFramework
+Note: This will not stop the DHCP server itself, but once this keyword is used,
+the DhcpServerLibrary will not take into account updates to DHCP leases anymore
+(until **`Restart Monitoring Server`** is used)
+This means that even after using **`Stop Monitoring Server`**, the keyword
+**`Stop`** must be run before RobotFramework terminates (or the dnsmasq process
+will carry on running)
 
 #### `Restart Monitoring Server`
 
-*Redémarre la supervision sur un serveur DHCP (qui aurait été arrêté via le mot clé **`Stop Monitoring Server`** *
+*Restart monitoring DHCP leases updates on the DHCP server (that would have
+been stopped using **`Stop Monitoring Server`** *
 
 #### `Set Lease Time`
 
-*Sélectionne la durée du bail DHCP*
+*Sets lease duration on the DHCP server*
 
-Cette valeur n'aura pas d'impact si elle est réglée après avoir invoqué le mot clé **`Start`** (elle peut être aussi réglée en paramètre optionnel de **`Start`**)
+Note: This keyword will have no impact if invoked after keyword **`Start`**
+(lease duration can also be provided as an optional argument of keyword
+**`Start`**)
 
 #### `Log Leases`
 
