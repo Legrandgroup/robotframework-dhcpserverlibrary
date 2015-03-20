@@ -211,18 +211,21 @@ and exception will be raised.
 
 ### Architecture of DhcpServerLibrary
 
-Le fonctionnement du serveur DHCP dnsmasq nécessite des droits root pour son fonctionnement.
+Running the DHCP serer dnsmasq requires root access rights.
 
-RobotFramework ne s'exécutant pas avec de tels droits, on utilise sudo pour lancer dnsmasq depuis la librairie de test :
+RobotFramework typically does not run as root.
+We thus use sudo to start dnsmasq from the DhcpServerLibrary:
 
-    DhcpServerLibrary.py est le module de connexion avec RobotFramework, avec en classe principale DhcpServerLibrary
-    Ce module s'exécute dans un processus rattaché à RobotFramework, avec les droits associés (souvent sous l'utilisateur jenkins)
-    Il lancera un processus fils serveur DHCP dnsmasq (via sudo) et supervisera celui-ci via D-Bus
-    Il interagit avec RobotFramework en implémentant l'interface standard des librairies Python RobotFramework
+* DhcpServerLibrary.py is the RobotFramework library package, its main class
+  being DhcpServerLibrary
+  This module runs in the RobotFramework process, with the same user rights
+  It will spawn a child DHCP dnsmasq process (via sudo) and will then monitor
+  DHCP event via D-Bus
 
-dnsmasq fournit des informations à DhcpServerLibrary via des signaux D-Bus sur le bus SYSTEM, sous le chemin d'objet /org/uk.thekelleys/dnsmasq
+dnsmasq provides all information to DhcpServerLibrary via D-Bus signals on the
+SYSTEM bus, under the object path /org/uk.thekelleys/dnsmasq
 
-Cet objet implémente une interface de service nommée org.uk.thekelleys.dnsmasq
+This object implemetns a service interface called org.uk.thekelleys.dnsmasq
 
 #### D-Bus signals/methods used by dnsmasq
 
@@ -235,8 +238,6 @@ The following D-Bus signals are sent by dnsmasq (when configured using enable-db
 The following D-Bus method is also invoked by DhcpServerLibrary on dnsmasq:
 
 * `GetVersion()`: To get the version of dnsmasq
-
-#### Outils de diagnostic D-Bus
 
 ### D-Bus diagnosis using D-Feet
 
