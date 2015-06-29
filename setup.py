@@ -27,7 +27,7 @@ setup(
     name='robotframework-dhcpserverlibrary',
     version=__lib_version__,
     description='This library allows RobotFramework to test DHCP clients, by communicating with a DHCP server installed on the test platform and to handle lease events using RobotFramework keywords',
-    long_description=read('README.rst'),
+    long_description=read('README.md'),
     author='Lionel Ains',
     author_email='lionel.ains@legrand.fr',
     url='https://github.com/Legrandgroup/robotframework-dhcpserverlibrary',
