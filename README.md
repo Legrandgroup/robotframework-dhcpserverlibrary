@@ -75,6 +75,9 @@ machine that will also run Robot Framework.
 To install this libary, run the `./setup.py install` command locate inside the
 repository.
 
+Once this library is installed, you can use it with the following python import:
+import rfdhcpserverlib.DhcpServerLibrary
+
 ### Setting the D-Bus permissions
 
 In order to allow the D-Bus messages used by DhcpServerLibrary (on the system bus),
