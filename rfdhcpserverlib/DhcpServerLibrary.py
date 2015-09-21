@@ -838,14 +838,20 @@ class DhcpServerLibrary:
             logger.info('There is a lease previously seen for device ' + str(mac) + ' associated with IP address ' + str(ip))
             return ip # Succeed
         try:
-            if timeout is None or timeout == 0:
-                raise Exception()   # Should fail, we are not allowed to wait
+            if timeout is None:
+                raise Exception('NoLeaseFound')   # Should fail, we are not allowed to wait
+            timeout = int(timeout)
+            if timeout <= 0:
+                raise Exception('NoLeaseFound')   # Should fail, we are not allowed to wait
             else:   # There is a timeout, so carry on waiting for this lease during this timeout
                 self._dnsmasq_wrapper.setMacAddrToWatch(mac)
                 if not self._dnsmasq_wrapper.watched_macaddr_got_lease_event.wait(timeout):
-                    raise Exception()
-        except:
-            raise Exception('No lease known for ' + str(mac))
+                    raise Exception('NoLeaseFound')
+        except Exception as e:
+            if e.message != 'NoLeaseFound':   # If we got an exception related to anything else than the no lease found case
+                raise   # Raise the exception
+            else:	# Raise this unexpected exception
+                raise Exception('No lease known for ' + str(mac))
     
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)    # Use Glib's mainloop as the default loop for all subsequent code
