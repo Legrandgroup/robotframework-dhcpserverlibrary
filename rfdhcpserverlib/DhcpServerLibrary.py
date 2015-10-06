@@ -15,6 +15,10 @@ import dbus.mainloop.glib
 import time
 import subprocess
 
+if __name__ != '__main__':
+    import robot.api
+
+
 client = None
 
 # This cleanup handler is not used when this library is imported in RF, only when run as standalone
@@ -296,11 +300,11 @@ class SlaveDhcpServerProcess:
     # Having the same PID file as your distribution allows to make sure only one instance of dnsmasq runs on the host (between instances launched by system V and by RF during tests) 
     DNSMASQ_PIDFILE = '/var/run/dnsmasq/dnsmasq.pid'
     
-    def __init__(self, dhcp_server_daemon_exec_path, ifname, log = True):
+    def __init__(self, dhcp_server_daemon_exec_path, ifname, logger = None):
         self._slave_dhcp_server_path = dhcp_server_daemon_exec_path
         self._slave_dhcp_server_pid = None
         self._ifname = ifname
-        self._log = log
+        self._logger = logger
         self._all_processes_pid = []  # List of all subprocessed launched by us
         self._lease_time = None
     
@@ -369,17 +373,20 @@ class SlaveDhcpServerProcess:
         # Note: the only option that we need to provide as a configuration file (here directly on stdin) is enable-dbus
         # This allows D-Bus signals to be sent out when leases are added/deleted
         # Caveat: This is not the same as the --enable-dbus option on the command line
-        logger.debug('Running command ' + str(cmd))
+        if logger is not None:
+            logger.debug('Running command ' + str(cmd))
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE) # stdin will be used as a pipe to send the config (see -C arg of dnsmasq)
         proc.communicate(input='enable-dbus')
         rc = proc.returncode
         if rc == 0: # There was no error while launching dnsmasq
             pass
         elif rc == 2:   # Address already in use
-            logger.error('dnsmasq failed to bind DHCP server socket: Address already in use')
+            if logger is not None:
+                logger.error('dnsmasq failed to bind DHCP server socket: Address already in use')
             raise Exception('DhcpPortAlreadyUsed')
         else:
-            logger.error('dnsmasq failed to stard')
+            if logger is not None:
+                logger.error('dnsmasq failed to stard')
             raise Exception('SlaveFailed')
         
         # Read the PID from the PID file and add store this to the PID variable below
@@ -396,7 +403,8 @@ class SlaveDhcpServerProcess:
         """
         Add a (child) PID to the list of PIDs that we should terminate when kill() is run
         """
-        logger.debug('Adding slave PID ' + str(pid))
+        if logger is not None:
+            logger.debug('Adding slave PID ' + str(pid))
         if not pid in self._all_processes_pid:  # Make sure we don't add twice a PID
             self._all_processes_pid += [pid] # Add
 
@@ -418,7 +426,8 @@ class SlaveDhcpServerProcess:
         If argument force is set to True, wait a maximum of timeout seconds after SIGINT and send a SIGKILL if is still alive after this timeout
         """
 
-        if log: logger.info('Sending SIGINT to slave PID ' + str(pid))
+        if logger is not None:
+            logger.info('Sending SIGINT to slave PID ' + str(pid))
         args = ['sudo', 'kill', '-SIGINT', str(pid)]    # Send Ctrl+C to slave DHCP client process
         subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
         
@@ -427,7 +436,8 @@ class SlaveDhcpServerProcess:
                 time.sleep(0.1)
                 timeout -= 0.1
                 if timeout <= 0:    # We have reached timeout... send a SIGKILL to the slave process to force termination
-                    if log: logger.info('Sending SIGKILL to slave PID ' + str(pid))
+                    if logger is not None:
+                        logger.info('Sending SIGKILL to slave PID ' + str(pid))
                     args = ['sudo', 'kill', '-SIGKILL', str(pid)]    # Send Ctrl+C to slave DHCP client process
                     subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
                     break
@@ -440,7 +450,8 @@ class SlaveDhcpServerProcess:
         if len(self._all_processes_pid) == 0:
             raise Exception('NoChildPID')
         pid = self._all_processes_pid[-1]   # Get last PID
-        if log: logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
+        if logger is not None:
+            logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
         args = ['sudo', 'kill', '-' + str(signum), str(pid)]    # Send the requested signal to slave process
         subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
             
@@ -669,7 +680,7 @@ class DhcpServerLibrary:
         if not lease_time is None:
             self.set_lease_time(lease_time)
         
-        self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname)
+        self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname, logger = robot.api.logger)
         if not self._lease_time is None:
             self._slave_dhcp_process.setLeaseTime(self._lease_time)
         self._slave_dhcp_process.start()
@@ -905,5 +916,3 @@ if __name__ == '__main__':
                     print('DHCP client is Off')
     finally:
         client.stop()
-else:
-    from robot.api import logger
