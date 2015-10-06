@@ -374,6 +374,7 @@ class SlaveDhcpServerProcess:
         if not self._lease_time is None:
             dhcp_range_arg += ',' + str(self._lease_time)
         cmd += [dhcp_range_arg]
+        cmd += ['--port=0'] # We disable DNS (only allow DHCP)
         cmd += ['--dhcp-authoritative'] # We are the only DHCP server on this test subnet
         cmd += ['--log-dhcp']   # Log DHCP events to syslog
         cmd += ['--leasefile-ro']   # Do not write to a lease file
