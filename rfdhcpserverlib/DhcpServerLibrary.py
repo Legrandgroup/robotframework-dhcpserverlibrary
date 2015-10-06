@@ -220,7 +220,7 @@ class DnsmasqDhcpServerWrapper:
         This method is used as a callback for asynchronous D-Bus method call to GetVersion()
         It is run as an error_handler to raise an exception when the call to GetVersion() failed
         """
-        logger.error('Error on invocation of GetVersion() to slave, via D-Bus')
+        logger.warn('Error on invocation of GetVersion() to slave, via D-Bus')
         raise Exception('ErrorOnDBusGetVersion')
         
     def _handleDhcpLeaseAdded(self, ipaddr, hwaddr, hostname, **kwargs):
@@ -384,20 +384,20 @@ class SlaveDhcpServerProcess:
         # Note: the only option that we need to provide as a configuration file (here directly on stdin) is enable-dbus
         # This allows D-Bus signals to be sent out when leases are added/deleted
         # Caveat: This is not the same as the --enable-dbus option on the command line
-        if logger is not None:
-            logger.debug('Running command ' + str(cmd))
+        if self._logger is not None:
+            self._logger.debug('Running command ' + str(cmd))
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE) # stdin will be used as a pipe to send the config (see -C arg of dnsmasq)
         proc.communicate(input='enable-dbus')
         rc = proc.returncode
         if rc == 0: # There was no error while launching dnsmasq
             pass
         elif rc == 2:   # Address already in use
-            if logger is not None:
-                logger.error('dnsmasq failed to bind DHCP server socket: Address already in use')
+            if self._logger is not None:
+                self._logger.warn('dnsmasq failed to bind DHCP server socket: Address already in use')
             raise Exception('DhcpPortAlreadyUsed')
         else:
-            if logger is not None:
-                logger.error('dnsmasq failed to stard')
+            if self._logger is not None:
+                self._logger.warn('dnsmasq failed to stard')
             raise Exception('SlaveFailed')
         
         # Read the PID from the PID file and add store this to the PID variable below
@@ -414,8 +414,8 @@ class SlaveDhcpServerProcess:
         """
         Add a (child) PID to the list of PIDs that we should terminate when kill() is run
         """
-        if logger is not None:
-            logger.debug('Adding slave PID ' + str(pid))
+        if self._logger is not None:
+            self._logger.debug('Adding slave PID ' + str(pid))
         if not pid in self._all_processes_pid:  # Make sure we don't add twice a PID
             self._all_processes_pid += [pid] # Add
 
@@ -437,8 +437,8 @@ class SlaveDhcpServerProcess:
         If argument force is set to True, wait a maximum of timeout seconds after SIGINT and send a SIGKILL if is still alive after this timeout
         """
 
-        if logger is not None:
-            logger.info('Sending SIGINT to slave PID ' + str(pid))
+        if self._logger is not None:
+            self._logger.info('Sending SIGINT to slave PID ' + str(pid))
         args = ['sudo', 'kill', '-SIGINT', str(pid)]    # Send Ctrl+C to slave DHCP client process
         subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
         
@@ -447,8 +447,8 @@ class SlaveDhcpServerProcess:
                 time.sleep(0.1)
                 timeout -= 0.1
                 if timeout <= 0:    # We have reached timeout... send a SIGKILL to the slave process to force termination
-                    if logger is not None:
-                        logger.info('Sending SIGKILL to slave PID ' + str(pid))
+                    if self._logger is not None:
+                        self._logger.info('Sending SIGKILL to slave PID ' + str(pid))
                     args = ['sudo', 'kill', '-SIGKILL', str(pid)]    # Send Ctrl+C to slave DHCP client process
                     subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
                     break
@@ -461,8 +461,8 @@ class SlaveDhcpServerProcess:
         if len(self._all_processes_pid) == 0:
             raise Exception('NoChildPID')
         pid = self._all_processes_pid[-1]   # Get last PID
-        if logger is not None:
-            logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
+        if self._logger is not None:
+            self._logger.info('Sending signal ' + str(signum) + ' to slave PID ' + str(pid))
         args = ['sudo', 'kill', '-' + str(signum), str(pid)]    # Send the requested signal to slave process
         subprocess.call(args, stdout=open(os.devnull, 'wb'), stderr=subprocess.STDOUT)
             
