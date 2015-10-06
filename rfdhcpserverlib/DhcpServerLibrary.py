@@ -16,8 +16,19 @@ import time
 import subprocess
 
 if __name__ != '__main__':
-    import robot.api
+    from robot.api import logger
+else:
+    try:
+        from console_logger import LOGGER as logger
+    except ImportError:
+        import logging
 
+        logger = logging.getLogger('console_logger')
+        logger.setLevel(logging.DEBUG)
+        
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
 
 client = None
 
@@ -680,7 +691,7 @@ class DhcpServerLibrary:
         if not lease_time is None:
             self.set_lease_time(lease_time)
         
-        self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname, logger = robot.api.logger)
+        self._slave_dhcp_process = SlaveDhcpServerProcess(self._dhcp_server_daemon_exec_path, self._ifname, logger = logger)
         if not self._lease_time is None:
             self._slave_dhcp_process.setLeaseTime(self._lease_time)
         self._slave_dhcp_process.start()
@@ -869,18 +880,7 @@ dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)    # Use Glib's mainloop a
 
 if __name__ == '__main__':
     atexit.register(cleanupAtExit)
-    try:
-        from console_logger import LOGGER as logger
-    except ImportError:
-        import logging
-
-        logger = logging.getLogger('console_logger')
-        logger.setLevel(logging.DEBUG)
-        
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-        logger.addHandler(handler)
-
+    
     try:
         input = raw_input
     except NameError:
