@@ -83,7 +83,7 @@ import rfdhcpserverlib.DhcpServerLibrary
 In order to allow the D-Bus messages used by DhcpServerLibrary (on the system bus),
 you will need to setup the permissions accordingly.
 
-Here is a sample permission file to save in /etc/d-bus-1/system.d:
+Here is a sample permission file to save in /etc/dbus-1/system.d:
 
 ```XML
 <!DOCTYPE busconfig PUBLIC
